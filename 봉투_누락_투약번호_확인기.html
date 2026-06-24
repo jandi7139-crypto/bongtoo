@@ -1,0 +1,224 @@
+
+<h2 class="sr-only">봉투 누락 및 투약번호 확인 앱</h2>
+
+<div style="padding: 1rem 0; max-width: 380px; margin: 0 auto;">
+
+  <div id="step1">
+    <p style="font-size: 13px; color: var(--color-text-secondary); margin: 0 0 8px;">전체 봉투 수를 입력하세요</p>
+    <div style="display: flex; gap: 8px; margin-bottom: 1.5rem;">
+      <input type="number" id="totalInput" placeholder="예: 12" min="1" style="flex: 1; font-size: 18px; text-align: center;" />
+      <button onclick="startScan()" style="padding: 0 20px; font-size: 15px;">시작</button>
+    </div>
+  </div>
+
+  <div id="step2" style="display:none;">
+    <div style="display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 10px; margin-bottom: 1rem;">
+      <div style="background: var(--color-background-secondary); border-radius: var(--border-radius-md); padding: 14px; text-align: center;">
+        <p style="font-size: 12px; color: var(--color-text-secondary); margin: 0 0 4px;">전체</p>
+        <p style="font-size: 24px; font-weight: 500; margin: 0;" id="totalCount">0</p>
+      </div>
+      <div style="background: var(--color-background-secondary); border-radius: var(--border-radius-md); padding: 14px; text-align: center;">
+        <p style="font-size: 12px; color: var(--color-text-secondary); margin: 0 0 4px;">스캔됨</p>
+        <p style="font-size: 24px; font-weight: 500; margin: 0;" id="scannedCount">0</p>
+      </div>
+    </div>
+
+    <div id="rxNotice" style="display:none; margin-bottom: 12px; padding: 10px 14px; border-radius: var(--border-radius-md); background: var(--color-background-info); border: 0.5px solid var(--color-border-info);">
+      <p style="font-size: 13px; color: var(--color-text-info); margin: 0;">투약번호 <strong id="rxDisplay" style="font-weight:500;"></strong> 기준으로 확인 중</p>
+    </div>
+
+    <p style="font-size: 13px; color: var(--color-text-secondary); margin: 0 0 8px;">바코드 스캔 또는 번호 직접 입력</p>
+    <div style="display: flex; gap: 8px; margin-bottom: 4px;">
+      <input type="text" id="barcodeInput" placeholder="예: 1453 3/12" style="flex: 1; font-size: 16px;" oninput="handleInput(this.value)" />
+      <button onclick="manualAdd()" style="padding: 0 16px;">추가</button>
+    </div>
+    <p style="font-size: 12px; margin: 0 0 1rem; min-height: 18px;" id="lastScanned" style="color: var(--color-text-secondary);"></p>
+
+    <div id="scannedGrid" style="display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 1.5rem;"></div>
+
+    <button onclick="showResult()" style="width: 100%; font-size: 16px; padding: 12px;">누락 확인</button>
+    <button onclick="reset()" style="width: 100%; font-size: 14px; padding: 10px; margin-top: 8px; color: var(--color-text-secondary);">처음부터</button>
+  </div>
+
+  <div id="step3" style="display:none;">
+    <div id="resultBox"></div>
+    <button onclick="goBack()" style="width: 100%; font-size: 15px; padding: 12px; margin-top: 1rem;">돌아가기</button>
+    <button onclick="reset()" style="width: 100%; font-size: 14px; padding: 10px; margin-top: 8px; color: var(--color-text-secondary);">처음부터</button>
+  </div>
+
+</div>
+
+<script>
+let total = 0;
+let scanned = new Set();
+let rxBase = null;
+let rxMismatch = [];
+
+function startScan() {
+  const v = parseInt(document.getElementById('totalInput').value);
+  if (!v || v < 1) { alert('올바른 숫자를 입력하세요'); return; }
+  total = v;
+  scanned = new Set();
+  rxBase = null;
+  rxMismatch = [];
+  document.getElementById('totalCount').textContent = total;
+  document.getElementById('scannedCount').textContent = 0;
+  document.getElementById('scannedGrid').innerHTML = '';
+  document.getElementById('lastScanned').textContent = '';
+  document.getElementById('lastScanned').style.color = 'var(--color-text-secondary)';
+  document.getElementById('barcodeInput').value = '';
+  document.getElementById('rxNotice').style.display = 'none';
+  document.getElementById('step1').style.display = 'none';
+  document.getElementById('step2').style.display = 'block';
+  document.getElementById('step3').style.display = 'none';
+  setTimeout(() => document.getElementById('barcodeInput').focus(), 100);
+}
+
+function parseBarcode(val) {
+  val = val.trim();
+  const m = val.match(/^(\d+)\s+(\d+)\s*[\/\-]\s*\d+$/);
+  if (m) return { rx: m[1], seq: parseInt(m[2]) };
+  const m2 = val.match(/^(\d+)\s*[\/\-]\s*\d+$/);
+  if (m2) return { rx: null, seq: parseInt(m2[1]) };
+  const n = parseInt(val);
+  if (!isNaN(n) && val.match(/^\d+$/)) return { rx: null, seq: n };
+  return null;
+}
+
+function handleInput(val) {
+  if (val.includes('/') || val.includes('-')) {
+    const parsed = parseBarcode(val);
+    if (parsed !== null) {
+      addNum(parsed);
+      document.getElementById('barcodeInput').value = '';
+    }
+  }
+}
+
+function manualAdd() {
+  const val = document.getElementById('barcodeInput').value;
+  const parsed = parseBarcode(val);
+  if (parsed === null) { alert('올바른 번호를 입력하세요\n예: 1453 3/12 또는 3/12'); return; }
+  addNum(parsed);
+  document.getElementById('barcodeInput').value = '';
+  document.getElementById('barcodeInput').focus();
+}
+
+function addNum(parsed) {
+  const { rx, seq } = parsed;
+  const msgEl = document.getElementById('lastScanned');
+
+  if (seq < 1 || seq > total) {
+    msgEl.style.color = 'var(--color-text-warning)';
+    msgEl.textContent = `⚠ ${seq}번은 범위 밖입니다 (1~${total})`;
+    return;
+  }
+  if (scanned.has(seq)) {
+    msgEl.style.color = 'var(--color-text-warning)';
+    msgEl.textContent = `${seq}번은 이미 스캔되었습니다`;
+    return;
+  }
+
+  if (rx) {
+    if (rxBase === null) {
+      rxBase = rx;
+      document.getElementById('rxDisplay').textContent = rx;
+      document.getElementById('rxNotice').style.display = 'block';
+    } else if (rx !== rxBase) {
+      rxMismatch.push({ seq, rx });
+      msgEl.style.color = 'var(--color-text-danger)';
+      msgEl.textContent = `⚠ ${seq}번 투약번호 불일치! (${rx} ≠ ${rxBase})`;
+      scanned.add(seq);
+      document.getElementById('scannedCount').textContent = scanned.size;
+      updateGrid();
+      return;
+    }
+  }
+
+  scanned.add(seq);
+  document.getElementById('scannedCount').textContent = scanned.size;
+  msgEl.style.color = 'var(--color-text-success)';
+  msgEl.textContent = `✓ ${seq}번 스캔 완료${rx ? ' · ' + rx : ''}`;
+  updateGrid();
+}
+
+function updateGrid() {
+  const grid = document.getElementById('scannedGrid');
+  grid.innerHTML = '';
+  const mismatchSeqs = new Set(rxMismatch.map(m => m.seq));
+  for (let i = 1; i <= total; i++) {
+    const el = document.createElement('div');
+    el.textContent = i;
+    el.style.cssText = `width:36px;height:36px;border-radius:var(--border-radius-md);display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:500;border:0.5px solid;`;
+    if (mismatchSeqs.has(i)) {
+      el.style.background = '#FCEBEB';
+      el.style.color = '#791F1F';
+      el.style.borderColor = '#F09595';
+    } else if (scanned.has(i)) {
+      el.style.background = '#EAF3DE';
+      el.style.color = '#27500A';
+      el.style.borderColor = '#97C459';
+    } else {
+      el.style.background = 'var(--color-background-secondary)';
+      el.style.color = 'var(--color-text-secondary)';
+      el.style.borderColor = 'var(--color-border-tertiary)';
+    }
+    grid.appendChild(el);
+  }
+}
+
+function showResult() {
+  const missing = [];
+  for (let i = 1; i <= total; i++) {
+    if (!scanned.has(i)) missing.push(i);
+  }
+  document.getElementById('step2').style.display = 'none';
+  document.getElementById('step3').style.display = 'block';
+  const box = document.getElementById('resultBox');
+  let html = '';
+
+  if (rxMismatch.length > 0) {
+    html += `<div style="background:#FCEBEB;border-radius:var(--border-radius-lg);padding:1.25rem;border:0.5px solid #F09595;margin-bottom:12px;">
+      <p style="font-size:15px;font-weight:500;color:#A32D2D;margin:0 0 10px;"><i class="ti ti-alert-triangle" aria-hidden="true"></i> 투약번호 불일치 ${rxMismatch.length}건</p>
+      <p style="font-size:12px;color:#A32D2D;margin:0 0 8px;">기준 투약번호: <strong style="font-weight:500;">${rxBase}</strong></p>
+      <div style="display:flex;flex-wrap:wrap;gap:6px;">
+        ${rxMismatch.map(m => `<span style="background:#F7C1C1;color:#791F1F;border-radius:var(--border-radius-md);padding:5px 12px;font-size:14px;">${m.seq}번 → ${m.rx}</span>`).join('')}
+      </div>
+    </div>`;
+  }
+
+  if (missing.length === 0) {
+    html += `<div style="background:#EAF3DE;border-radius:var(--border-radius-lg);padding:1.5rem;text-align:center;border:0.5px solid #97C459;">
+      <p style="font-size:28px;margin:0 0 6px;">✓</p>
+      <p style="font-size:17px;font-weight:500;color:#27500A;margin:0 0 4px;">모든 봉투 확인 완료</p>
+      <p style="font-size:13px;color:#3B6D11;margin:0;">${total}개 모두 스캔되었습니다</p>
+    </div>`;
+  } else {
+    html += `<div style="background:#FCEBEB;border-radius:var(--border-radius-lg);padding:1.5rem;border:0.5px solid #F09595;">
+      <p style="font-size:15px;font-weight:500;color:#A32D2D;margin:0 0 10px;"><i class="ti ti-alert-triangle" aria-hidden="true"></i> 누락된 봉투 ${missing.length}개</p>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;">
+        ${missing.map(n => `<span style="background:#F7C1C1;color:#791F1F;border-radius:var(--border-radius-md);padding:6px 14px;font-size:15px;font-weight:500;">${n}번</span>`).join('')}
+      </div>
+      <p style="font-size:13px;color:#A32D2D;margin:10px 0 0;">${scanned.size}/${total}개 스캔됨</p>
+    </div>`;
+  }
+
+  box.innerHTML = html;
+}
+
+function goBack() {
+  document.getElementById('step2').style.display = 'block';
+  document.getElementById('step3').style.display = 'none';
+}
+
+function reset() {
+  document.getElementById('totalInput').value = '';
+  document.getElementById('step1').style.display = 'block';
+  document.getElementById('step2').style.display = 'none';
+  document.getElementById('step3').style.display = 'none';
+  total = 0;
+  scanned = new Set();
+  rxBase = null;
+  rxMismatch = [];
+}
+</script>
